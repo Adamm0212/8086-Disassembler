@@ -8,7 +8,8 @@
 	inputNOTOK db "Error Opening Input File!$"
 	outputNOTOK db "Error Creating Output File!$"
 	space db " $"
-	newline db 10, 13, "$"
+	newlineNotFile db 10, 13, "$"
+	newline db 13, "$"
 	inputFileName db 64 dup (0)
 	inputFileHandle dw ?
 	inputFileSize dw ?
@@ -16,24 +17,38 @@
 	outputFileName db 64 dup(0)
 	outputFileHandle dw ?
 	
-	inputBuffer db 60000 dup(0)
+	inputBuffer db 32768 dup(0)
 	neatpazinta db "NEATPAZINTA$"
 	
-	msg00000 db "[BX+SI$"
-	msg00001 db "[BX+DI$"
-	msg00010 db "[BP+SI$"
-	msg00011 db "[BP+DI$"
-	msg00100 db "[SI$"
-	msg00101 db "[DI$"
-	;msg00110 tiesioginis adresas
-	msg00111 db "[BX]$"
+	tempChar db 0
 	
-	msg01110 db "[BP$"
+	REG8_NAMES db 'ALCLDLBLAHCHDHBH'
+	REG16_NAMES db 'AXCXDXBXSPBPSIDI'
 	
-	mov10 db "al <- $"
-	mov11 db "ax <- $"
-	mov20 db "al -> $"
-	mov21 db "ax -> $"
+	rm_bx_si db '[BX+SI$'
+	rm_bx_di db '[BX+DI$'
+	rm_bp_si db '[BP+SI$'
+	rm_bp_di db '[BP+DI$'
+	rm_si    db '[SI$'
+	rm_di    db '[DI$'
+	rm_bp    db '[BP$'
+	rm_bx    db '[BX$'
+	
+	AddrModeTable dw rm_bx_si, rm_bx_di, rm_bp_si, rm_bp_di, rm_si, rm_di, rm_bp, rm_bx
+	
+	wFlag db ?
+	
+	SegmentPrefix db 0
+	SegmentES db 'ES:', '$'
+	SegmentCS db 'CS:', '$'
+	SegmentSS db 'SS:', '$'
+	SegmentDS db 'DS:', '$'
+
+	
+	mov10 db "AL, $"
+	mov11 db "AX, $"
+	mov20 db ", AL$"
+	mov21 db ", AX$"
 	w_0 db "8 bits$"
 	w_1 db "16 bits$"
 	
@@ -43,6 +58,8 @@ start:
 	mov ax, @data
 	mov ds, ax
 	
+	xor si, si
+	xor ch, ch
 	mov cl, es:[80h]
 	cmp cl, 0
 	je 	klaida
@@ -113,7 +130,7 @@ outputFileEnd:
 	mov ah, 9
 	mov dx, offset inputOK
 	int 21h
-	mov dx, offset newline
+	mov dx, offset newlineNotFile
 	int 21h
 	; create output file
 	mov ah, 3Ch
@@ -126,7 +143,7 @@ outputFileEnd:
 	mov ah, 9
 	mov dx, offset outputOK
 	int 21h
-	mov dx, offset newline
+	mov dx, offset newlineNotFile
 	int 21h
 	;****************** Failu atidarymo pabaiga *******************
 	
@@ -145,6 +162,7 @@ outputFileEnd:
 loop_check_OPK:
 	cmp di, [inputFileSize]
 	jae print_output
+	CALL detectPrefix
 	CALL checkMOV
 	
 	
@@ -179,7 +197,7 @@ outputErr:
 Skaitymas PROC
 	mov ah, 3Fh
 	mov bx, [inputFileHandle]
-	mov cx, 60000
+	mov cx, 32768
 	mov dx, offset inputBuffer
 	int 21h
 	mov [inputFileSize], ax
@@ -187,18 +205,46 @@ Skaitymas PROC
 Skaitymas ENDP
 PRINT PROC
 	push ax
-	mov ah, 2
-	int 21h
-	pop ax
-	RET
+	push bx
+	push cx
+	push dx
+	push ds
+		
+	mov ah, 40h                    ; DOS write to file
+    mov bx, [outputFileHandle]     ; BX = file handle
+    mov cx, 1                      ; one byte
+    mov al, dl
+	mov [tempChar], al
+    mov dx, offset tempChar             ; pointer to a memory byte
+    int 21h
+	
+	pop ds
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 PRINT ENDP
 PRINTS PROC
 	push ax
 	push bx
 	push cx
 	push dx
-	mov ah, 9
-	int 21h
+	push si
+	
+	mov bx, [outputFileHandle]
+	mov si, dx
+	
+writeLoop:
+	mov al, [si]
+	cmp al, '$'
+	je writeLoopEnd
+	mov dl, al
+	CALL PRINT
+	inc si
+	jmp writeLoop
+writeLoopEnd:
+	pop si
 	pop dx
 	pop cx
 	pop bx
@@ -246,1000 +292,206 @@ decodeModRM PROC
 	
 	RET
 decodeModRM ENDP
-decodeREG0 PROC
+decodeREG PROC
 	push ax
-	mov ah, 2
-	cmp cl, 0
-	je regAL
-	cmp cl, 1
-	je regCL
-	cmp cl, 2
-	je regDL
-	cmp cl, 3
-	je regBL
-	cmp cl, 4
-	je regAH
-	cmp cl, 5
-	je regCH
-	cmp cl, 6
-	je regDH
-	cmp cl, 7
-	je regBH
-regAL:
-	mov dl, 'A'
-	int 21h
-	mov dl, 'L'
-	int 21h
+	push bx
+	push dx
+	
+	mov dx, cx
+	shl dx, 1
+	mov bx, dx
+	
+	cmp al, 0
+	je use8
+	mov si, offset REG16_NAMES
+	jmp gotTable
+use8:
+	mov si, offset REG8_NAMES
+gotTable:	
+	add si, bx
+	
+	mov dl, [si]
+	CALL PRINT
+	mov dl, [si+1]
+	CALL PRINT
+	
+	pop dx
+	pop bx
 	pop ax
 	RET
-regCL:
-	mov dl, 'C'
-	int 21h
-	mov dl, 'L'
-	int 21h
-	pop ax
-	RET
-regDL:
-	mov dl, 'D'
-	int 21h
-	mov dl, 'L'
-	int 21h
-	pop ax
-	RET
-regBL:
-	mov dl, 'B'
-	int 21h
-	mov dl, 'L'
-	int 21h
-	pop ax
-	RET
-regAH:
-	mov dl, 'A'
-	int 21h
-	mov dl, 'H'
-	int 21h
-	pop ax
-	RET
-regCH:
-	mov dl, 'C'
-	int 21h
-	mov dl, 'H'
-	int 21h
-	pop ax
-	RET
-regDH:
-	mov dl, 'D'
-	int 21h
-	mov dl, 'H'
-	int 21h
-	pop ax
-	RET
-regBH:
-	mov dl, 'B'
-	int 21h
-	mov dl, 'H'
-	int 21h
-	pop ax
-	RET
-decodeREG0 ENDP
-decodeREG1 PROC
+decodeREG ENDP
+decodeRM PROC
 	push ax
-	mov ah, 2
-	cmp cl, 0
-	je regAX
-	cmp cl, 1
-	je regCX
-	cmp cl, 2
-	je regDX
-	cmp cl, 3
-	je regBX
-	cmp cl, 4
-	je regSP
-	cmp cl, 5
-	je regBP
-	cmp cl, 6
-	je regSI
-	cmp cl, 7
-	je regDI
-regAX:
-	mov dl, 'A'
-	int 21h
-	mov dl, 'X'
-	int 21h
-	pop ax
-	RET
-regCX:
-	mov dl, 'C'
-	int 21h
-	mov dl, 'X'
-	int 21h
-	pop ax
-	RET
-regDX:
-	mov dl, 'D'
-	int 21h
-	mov dl, 'X'
-	int 21h
-	pop ax
-	RET
-regBX:
-	mov dl, 'B'
-	int 21h
-	mov dl, 'X'
-	int 21h
-	pop ax
-	RET
-regSP:
-	mov dl, 'S'
-	int 21h
-	mov dl, 'P'
-	int 21h
-	pop ax
-	RET
-regBP:
-	mov dl, 'B'
-	int 21h
-	mov dl, 'P'
-	int 21h
-	pop ax
-	RET
-regSI:
-	mov dl, 'S'
-	int 21h
-	mov dl, 'I'
-	int 21h
-	pop ax
-	RET
-regDI:
-	mov dl, 'D'
-	int 21h
-	mov dl, 'I'
-	int 21h
-	pop ax
-	RET
-decodeREG1 ENDP
-decodeRM0 PROC
-	cmp ah, 0
-	jne mod00continue
-	jmp mod00
-mod00continue:
-	cmp ah, 1
-	jne mod01continue
-	jmp mod01
-mod01continue:
-	cmp ah, 2
-	jne mod10continue
-	jmp mod10
-mod10continue:
-	cmp ah, 3
-	jmp mod11
-mod00:
-	cmp bl, 0
-	je rm00000
-	cmp bl, 1
-	je rm00001
-	cmp bl, 2
-	je rm00010
-	cmp bl, 3
-	je rm00011
-	cmp bl, 4
-	je rm00100
-	cmp bl, 5
-	je rm00101
-	cmp bl, 6
-	je rm00110
-	cmp bl, 7
-	je rm00111
-rm00000:
-	mov dx, offset msg00000
-	CALL PRINTS
+	push bx
+	push dx
+	
+	mov [wFlag], al
+	
+	cmp ah, 11b
+	je rmMod11
+	cmp ah, 00b
+	je rmMod00
+	cmp ah, 01b
+	jne rmMod01skip
+	jmp rmMod01
+rmMod01skip:
+	cmp ah, 10b
+	jne rmMod10skip
+	jmp rmMod10
+rmMod10skip:
+	jmp rmEnd
+;------------------------------
+rmMod11:
+	mov al, [wFlag]
+	cmp al, 0
+	je rm_8
+	jmp rm_16
+rm_8:
+	CALL PrintSegmentPrefix
+	shl bx, 1
+	mov dl, [REG8_NAMES + bx]
+	call PRINT
+	mov dl, [REG8_NAMES + bx + 1]
+	call PRINT
+	add di, 1
+	jmp rmEnd
+rm_16:
+	CALL PrintSegmentPrefix
+	shl bl, 1
+	mov dl, [REG16_NAMES + bx]
+	call PRINT
+	mov dl, [REG16_NAMES + bx + 1]
+	call PRINT
+	add di, 1
+	jmp rmEnd
+;-------------------------------
+rmMod00:
+	; mod = 00 -> memory, no displacement
+    cmp bl, 110b
+    je  rmTiesioginis  ; [disp16] case
+	CALL PrintSegmentPrefix
+    shl bx, 1
+    mov dx, [AddrModeTable + bx]
+    call PRINTS
 	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00001:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00010:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00011:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00100:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00101:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00110:
+	call PRINT
+	add di, 1
+    jmp rmEnd
+rmTiesioginis:
+	CALL PrintSegmentPrefix
 	mov dl, '['
 	CALL PRINT
-	mov dl, [inputBuffer + DI + 2]
+	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
-	mov dl, [inputBuffer + DI + 1]
+	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
 	mov dl, ']'
 	CALL PRINT
 	add di, 3
-	RET
-rm00111:
-	mov dx, offset msg00111
+	jmp rmEnd
+;----------------------------------
+rmMod01:
+	CALL PrintSegmentPrefix
+	shl bx, 1
+	mov dx, [AddrModeTable + bx]
 	CALL PRINTS
+	mov dl, '+'
+	call PRINT
+	mov dl, [inputBuffer + di + 1]
+	call toHexPrint
 	mov dl, ']'
 	CALL PRINT
-	inc di
+	add di, 2
+	jmp rmEnd
+;----------------------------------
+rmMod10:
+	CALL PrintSegmentPrefix
+	shl bx, 1
+	mov dx, [AddrModeTable + bx]
+	CALL PRINTS
+	mov dl, '+'
+	call PRINT
+	mov dl, [inputBuffer + di + 2]
+	call toHexPrint
+	mov dl, '+'
+	CALL PRINT
+	mov dl, [inputBuffer + di + 1]
+	call toHexPrint
+	mov dl, ']'
+	CALL PRINT
+	add di, 3
+	jmp rmEnd
+;----------------------------------
+rmEnd:
+	mov SegmentPrefix, 0
+	pop dx
+	pop bx
+	pop ax
 	RET
-mod01:
-	cmp bl, 0
-	jne rmcontinue
-	jmp rm01000
-rmcontinue:
-	cmp bl, 1
-	jne rmcontinue2
-	jmp rm01001
-rmcontinue2:
-	cmp bl, 2
-	jne rmcontinue3
-	jmp rm01010
-rmcontinue3:
-	cmp bl, 3
-	jne rmcontinue4
-	jmp rm01011
-rmcontinue4:
-	cmp bl, 4
-	jne rmcontinue5
-	jmp rm01100
-rmcontinue5:
-	cmp bl, 5
-	jne rmcontinue6
-	jmp rm01101
-rmcontinue6:
-	cmp bl, 6
-	jne rmcontinue7
-	jmp rm01110
-rmcontinue7:
-	cmp bl, 7
-	jmp rm01111
-rm01000:
+decodeRM ENDP
+detectPrefix PROC
+	mov al, [inputBuffer + di]
+	cmp al, 26h
+	je prefixES
+	cmp al, 2Eh
+	je prefixCS
+	cmp al, 36h
+	je prefixSS
+	cmp al, 3Eh
+	je prefixDS
+	jmp noPrefix
+	
+prefixES:
+	mov SegmentPrefix, 26h
+	inc di
+	jmp noPrefix
+prefixCS:
+	mov SegmentPrefix, 2Eh
+	inc di
+	jmp noPrefix
+prefixSS:
+	mov SegmentPrefix, 36h
+	inc di
+	jmp noPrefix
+prefixDS:
+	mov SegmentPrefix, 3Eh
+	inc di
+	jmp noPrefix
+noPrefix:
+	RET
+detectPrefix ENDP
+PrintSegmentPrefix PROC
+    cmp SegmentPrefix, 0
+    je  noSegPrint
 
-	mov dx, offset msg00000
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01001:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01010:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01011:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01100:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01101:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01110:
-	mov dx, offset msg01110
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01111:
-	mov dx, offset msg00111
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-mod10:
-	cmp bl, 0
-	jne rmcontinue8
-	je rm10000
-rmcontinue8:
-	cmp bl, 1
-	jne rmcontinue9
-	jmp rm10001
-rmcontinue9:
-	cmp bl, 2
-	jne rmcontinue10
-	jmp rm10010
-rmcontinue10:
-	cmp bl, 3
-	jne rmcontinue11
-	jmp rm10011
-rmcontinue11:
-	cmp bl, 4
-	jne rmcontinue12
-	jmp rm10100
-rmcontinue12:
-	cmp bl, 5
-	jne rmcontinue13
-	jmp rm10101
-rmcontinue13:
-	cmp bl, 6
-	jne rmcontinue14
-	jmp rm10110
-rmcontinue14:
-	cmp bl, 7
-	jmp rm10111
-rm10000:
-	mov dx, offset msg00000
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10001:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10010:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10011:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10100:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10101:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10110:
-	mov dx, offset msg01110
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10111:
-	mov dx, offset msg00111
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-mod11:
-	cmp bl, 0
-	je rm11000
-	cmp bl, 1
-	je rm11001
-	cmp bl, 2
-	je rm11010
-	cmp bl, 3
-	je rm11011
-	cmp bl, 4
-	je rm11100
-	cmp bl, 5
-	je rm11101
-	cmp bl, 6
-	je rm11110
-	cmp bl, 7
-	je rm11111
-rm11000:
-	mov dl, 'A'
-	CALL PRINT
-	mov dl, 'L'
-	CALL PRINT
-	inc di
-	RET
-rm11001:
-	mov dl, 'C'
-	CALL PRINT
-	mov dl, 'L'
-	CALL PRINT
-	inc di
-	RET
-rm11010:
-	mov dl, 'D'
-	CALL PRINT
-	mov dl, 'L'
-	CALL PRINT
-	inc di
-	RET
-rm11011:
-	mov dl, 'B'
-	CALL PRINT
-	mov dl, 'L'
-	CALL PRINT
-	inc di
-	RET
-rm11100:
-	mov dl, 'A'
-	CALL PRINT
-	mov dl, 'H'
-	CALL PRINT
-	inc di
-	RET
-rm11101:
-	mov dl, 'C'
-	CALL PRINT
-	mov dl, 'H'
-	CALL PRINT
-	inc di
-	RET
-rm11110:
-	mov dl, 'D'
-	CALL PRINT
-	mov dl, 'H'
-	CALL PRINT
-	inc di
-	RET
-rm11111:
-	mov dl, 'B'
-	CALL PRINT
-	mov dl, 'H'
-	CALL PRINT
-	inc di
-	RET
-decodeRM0 ENDP
-decodeRM1 PROC
-	cmp ah, 0
-	jne mod00continue1
-	jmp mod00s
-mod00continue1:
-	cmp ah, 1
-	jne mod01continue1
-	jmp mod01s
-mod01continue1:
-	cmp ah, 2
-	jne mod10continue1
-	jmp mod10s
-mod10continue1:
-	cmp ah, 3
-	jmp mod11s
-mod00s:
-	cmp bl, 0
-	je rm00000s
-	cmp bl, 1
-	je rm00001s
-	cmp bl, 2
-	je rm00010s
-	cmp bl, 3
-	je rm00011s
-	cmp bl, 4
-	je rm00100s
-	cmp bl, 5
-	je rm00101s
-	cmp bl, 6
-	je rm00110s
-	cmp bl, 7
-	je rm00111s
-rm00000s:
-	mov dx, offset msg00000
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00001s:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00010s:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00011s:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00100s:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00101s:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-rm00110s:
-	mov dl, '['
-	CALL PRINT
-	mov dl, [inputBuffer + DI + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + DI + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm00111s:
-	mov dx, offset msg00111
-	CALL PRINTS
-	mov dl, ']'
-	CALL PRINT
-	inc di
-	RET
-mod01s:
-	cmp bl, 0
-	jne rmcontinueS
-	jmp rm01000s
-rmcontinueS:
-	cmp bl, 1
-	jne rmcontinue2S
-	jmp rm01001s
-rmcontinue2S:
-	cmp bl, 2
-	jne rmcontinue3S
-	jmp rm01010s
-rmcontinue3S:
-	cmp bl, 3
-	jne rmcontinue4S
-	jmp rm01011s
-rmcontinue4S:
-	cmp bl, 4
-	jne rmcontinue5S
-	jmp rm01100s
-rmcontinue5S:
-	cmp bl, 5
-	jne rmcontinue6S
-	jmp rm01101s
-rmcontinue6S:
-	cmp bl, 6
-	jne rmcontinue7S
-	jmp rm01110s
-rmcontinue7S:
-	cmp bl, 7
-	jmp rm01111s
-rm01000s:
+    cmp SegmentPrefix, 26h
+    je  segESl
+    cmp SegmentPrefix, 2Eh
+    je  segCSl
+    cmp SegmentPrefix, 36h
+    je  segSSl
+    cmp SegmentPrefix, 3Eh
+    je  segDSl
+    jmp noSegPrint
 
-	mov dx, offset msg00000
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01001s:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01010s:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01011s:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01100s:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01101s:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01110s:
-	mov dx, offset msg01110
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-rm01111s:
-	mov dx, offset msg00111
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 2
-	RET
-mod10s:
-	cmp bl, 0
-	jne rmcontinue8S
-	je rm10000s
-rmcontinue8S:
-	cmp bl, 1
-	jne rmcontinue9S
-	jmp rm10001s
-rmcontinue9S:
-	cmp bl, 2
-	jne rmcontinue10S
-	jmp rm10010s
-rmcontinue10S:
-	cmp bl, 3
-	jne rmcontinue11S
-	jmp rm10011s
-rmcontinue11S:
-	cmp bl, 4
-	jne rmcontinue12S
-	jmp rm10100s
-rmcontinue12S:
-	cmp bl, 5
-	jne rmcontinue13S
-	jmp rm10101s
-rmcontinue13S:
-	cmp bl, 6
-	jne rmcontinue14S
-	jmp rm10110s
-rmcontinue14S:
-	cmp bl, 7
-	jmp rm10111s
-rm10000s:
-	mov dx, offset msg00000
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10001s:
-	mov dx, offset msg00001
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10010s:
-	mov dx, offset msg00010
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10011s:
-	mov dx, offset msg00011
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10100s:
-	mov dx, offset msg00100
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10101s:
-	mov dx, offset msg00101
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10110s:
-	mov dx, offset msg01110
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-rm10111s:
-	mov dx, offset msg00111
-	CALL PRINTS
-	mov dl, '+'
-	CALL PRINT
-	mov dl, [inputBuffer + di + 2]
-	CALL toHexPrint
-	mov dl, [inputBuffer + di + 1]
-	CALL toHexPrint
-	mov dl, ']'
-	CALL PRINT
-	add di, 3
-	RET
-mod11s:
-	cmp bl, 0
-	je rm11000s
-	cmp bl, 1
-	je rm11001s
-	cmp bl, 2
-	je rm11010s
-	cmp bl, 3
-	je rm11011s
-	cmp bl, 4
-	je rm11100s
-	cmp bl, 5
-	je rm11101s
-	cmp bl, 6
-	je rm11110s
-	cmp bl, 7
-	je rm11111s
-rm11000s:
-	mov dl, 'A'
-	CALL PRINT
-	mov dl, 'X'
-	CALL PRINT
-	inc di
-	RET
-rm11001s:
-	mov dl, 'C'
-	CALL PRINT
-	mov dl, 'X'
-	CALL PRINT
-	inc di
-	RET
-rm11010s:
-	mov dl, 'D'
-	CALL PRINT
-	mov dl, 'X'
-	CALL PRINT
-	inc di
-	RET
-rm11011s:
-	mov dl, 'B'
-	CALL PRINT
-	mov dl, 'X'
-	CALL PRINT
-	inc di
-	RET
-rm11100s:
-	mov dl, 'S'
-	CALL PRINT
-	mov dl, 'P'
-	CALL PRINT
-	inc di
-	RET
-rm11101s:
-	mov dl, 'B'
-	CALL PRINT
-	mov dl, 'P'
-	CALL PRINT
-	inc di
-	RET
-rm11110s:
-	mov dl, 'S'
-	CALL PRINT
-	mov dl, 'I'
-	CALL PRINT
-	inc di
-	RET
-rm11111s:
-	mov dl, 'D'
-	CALL PRINT
-	mov dl, 'I'
-	CALL PRINT
-	inc di
-	RET
-decodeRM1 ENDP
+segESl:
+    mov dx, offset SegmentES
+    CALL PRINTS
+    jmp noSegPrint
+segCSl:
+    mov dx, offset SegmentCS
+    CALL PRINTS
+    jmp noSegPrint
+segSSl:
+    mov dx, offset SegmentSS
+    CALL PRINTS
+    jmp noSegPrint
+segDSl:
+    mov dx, offset SegmentDS
+    CALL PRINTS
+noSegPrint:
+    RET
+PrintSegmentPrefix ENDP
 checkMOV PROC
 	mov al, [inputBuffer + di]
 	;************* COMPARE 6 ATVEJAI ***************
@@ -1268,8 +520,8 @@ checkMOV PROC
 	je mov4_10
 	cmp al, 8Bh
 	je mov4_11
-	; 5. segmento registras <> registras/atmintis		 aka 1000 11d0 mod 0sr r/m [poslinkis]
-	; 6. MOV registras < betarpiškas operandas			 aka B0h 1011 wreg bojb [bovb]
+	; 6. segmento registras <> registras/atmintis		 aka 1000 11d0 mod 0sr r/m [poslinkis]
+	; 5. MOV registras < betarpiškas operandas			 aka B0h 1011 wreg bojb [bovb]
 	mov dl, al
 	shr dl, 3
 	cmp dl, 16h
@@ -1321,17 +573,17 @@ mov5_1:
 	RET
 checkMOV ENDP
 mov1_0p PROC
-	mov dx, offset w_0
-	CALL PRINTS
-	mov dx, offset space
-	CALL PRINTS
 	mov dx, offset mov10
 	CALL PRINTS
-	
+	CALL PrintSegmentPrefix
+	mov dl, '['
+	CALL PRINT
 	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
 	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
+	mov dl, ']'
+	CALL PRINT
 	mov dx, offset newline
 	CALL PRINTS
 	add di, 3
@@ -1339,52 +591,52 @@ mov1_0p PROC
 mov1_0p ENDP
 mov1_1p PROC
 
-	mov dx, offset w_1
-	CALL PRINTS
-	mov dx, offset space
-	CALL PRINTS
 	mov dx, offset mov11
 	CALL PRINTS
-	
+	CALL PrintSegmentPrefix
+	mov dl, '['
+	CALL PRINT
 	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
 	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
+	mov dl, ']'
+	CALL PRINT
 	mov dx, offset newline
 	CALL PRINTS
 	add di, 3
 	RET
 mov1_1p ENDP
 mov2_0p PROC
-	mov dx, offset w_0
-	CALL PRINTS
-	mov dx, offset space
-	CALL PRINTS
-	mov dx, offset mov20
-	CALL PRINTS
-	
+	CALL PrintSegmentPrefix
+	mov dl, '['
+	CALL PRINT
 	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
 	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
+	mov dl, ']'
+	CALL PRINT
+	mov dx, offset mov20
+	CALL PRINTS
 	mov dx, offset newline
 	CALL PRINTS
 	add di, 3
 	RET
 mov2_0p ENDP
 mov2_1p PROC
-	mov dx, offset w_1
-	CALL PRINTS
-	
-	mov dx, offset space
-	CALL PRINTS
-	mov dx, offset mov21
-	CALL PRINTS
-	
+	CALL PrintSegmentPrefix
+	mov dl, '['
+	CALL PRINT
 	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
 	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
+	mov dl, ']'
+	CALL PRINT
+	
+	mov dx, offset mov21
+	CALL PRINTS
 	mov dx, offset newline
 	CALL PRINTS
 	add di, 3
@@ -1398,20 +650,20 @@ mov3_0p PROC
 
 	inc di
 	mov dl, [inputBuffer + di]
-	;CALL decodeREG0 ; print the reg
 	
-	CALL decodeRM0	; paziuri i mod ir i r/m ir atspausdina registra/memory
+	mov al, 0
+	CALL decodeRM	; paziuri i mod ir i r/m ir atspausdina registra/memory
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
 	
 	mov dl, [inputBuffer + di]
 	CALL toHexPrint
 	mov dx, offset newline
 	CALL PRINTS
-	inc di
+	add di, 2
 	RET
 endmov3_0p:
 	RET
@@ -1425,11 +677,12 @@ mov3_1p PROC
 	inc di
 	mov dl, [inputBuffer + di]
 	
-	CALL decodeRM1	; paziuri i mod ir i r/m ir atspausdina registra/memory
+	mov al, 1
+	CALL decodeRM	; paziuri i mod ir i r/m ir atspausdina registra/memory
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
 	
 	mov dl, [inputBuffer + di + 1]
@@ -1446,17 +699,20 @@ mov3_1p ENDP
 mov4_00p PROC
 	inc di
 	mov al, [inputBuffer + di]
-	CALL decodeModRM
+	CALL decodeModRM ; ah = mod cl = reg bl = r/m
 	
 	mov dl, [inputBuffer + di]
-	CALL decodeRM0
+	mov al, 0
+	CALL decodeRM
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
-	
-	CALL decodeREG0
+	mov al, 0
+	CALL decodeREG
+	mov dx, offset newline
+	CALL PRINTS
 	RET
 mov4_00p ENDP
 mov4_01p PROC
@@ -1465,15 +721,18 @@ mov4_01p PROC
 	CALL decodeModRM
 	
 	mov dl, [inputBuffer + di]
-	CALL decodeREG0
+	mov al, 1
+	CALL decodeRM
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
 	
-	CALL decodeRM0
-	
+	push ax
+	mov al, 1
+	CALL decodeREG
+	pop ax
 	mov dx, offset newline
 	CALL PRINTS
 	RET
@@ -1484,15 +743,14 @@ mov4_10p PROC
 	CALL decodeModRM
 	
 	mov dl, [inputBuffer + di]
-	CALL decodeREG0
-	
-	mov dl, '<'
+	mov al, 0
+	CALL decodeREG
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
-	
-	CALL decodeRM0
-	
+	mov al, 0
+	CALL decodeRM
 	mov dx, offset newline
 	CALL PRINTS
 	RET
@@ -1503,15 +761,16 @@ mov4_11p PROC
 	CALL decodeModRM
 	
 	mov dl, [inputBuffer + di]
-	CALL decodeREG1
-	
-	mov dl, '<'
+	push ax
+	mov al, 1
+	CALL decodeREG
+	pop ax
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT
-	
-	CALL decodeRM1
-	
+	mov al, 1
+	CALL decodeRM
 	mov dx, offset newline
 	CALL PRINTS
 	RET
@@ -1519,11 +778,13 @@ mov4_11p ENDP
 mov5_0p PROC ; 1011 wreg bojb [bovb]
 	mov al, [inputBuffer + di]
 	and al, 7
-	CALL decodeREG0
+	mov cl, al
+	mov al, 0
+	CALL decodeREG
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT 
 	
 	mov dl, [inputBuffer + di + 1]
@@ -1536,18 +797,19 @@ mov5_0p ENDP
 mov5_1p PROC
 	mov al, [inputBuffer + di]
 	and al, 7
-	CALL decodeREG1
+	mov cl, al
+	mov al, 1
+	CALL decodeREG
 	
-	mov dl, '<'
+	mov dl, ','
 	CALL PRINT
-	mov dl, '-'
+	mov dl, ' '
 	CALL PRINT 
 	
 	mov dl, [inputBuffer + di + 2]
 	CALL toHexPrint
 	mov dl, [inputBuffer + di + 1]
 	CALL toHexPrint
-	
 	mov dx, offset newline
 	CALL PRINTS
 	add di, 3
